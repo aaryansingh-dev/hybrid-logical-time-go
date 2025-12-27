@@ -30,5 +30,9 @@ func (e *SubscriptionCreated) Name() string{
 func (e *SubscriptionCreated) Execute(timeProvider clock.TimeProvider) []engine.Event {
     fmt.Printf("[%s] Subscription created for %s\n", timeProvider.Now().Format(time.RFC3339), e.customer)
 
-    return []engine.Event{}
+	// Add a trial ended event
+	trialEnd := timeProvider.Now().Add(time.Duration(e.trialDays*24) * time.Hour)
+    return []engine.Event{
+		NewTrialEnded(trialEnd, e.customer),
+	}
 }
