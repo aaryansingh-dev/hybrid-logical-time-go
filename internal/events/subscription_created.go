@@ -24,7 +24,7 @@ func (e *SubscriptionCreated) Time() time.Time {
 }
 
 func (e *SubscriptionCreated) Name() string{
-	return e.name
+	return GetTypeName(e)
 }
 
 func (e *SubscriptionCreated) Execute(timeProvider clock.TimeProvider) []engine.Event {

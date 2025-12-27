@@ -22,7 +22,7 @@ func (e *LogEvent) Time() time.Time {
 }
 
 func (e *LogEvent) Name() string {
-	return e.name
+	return GetTypeName(e)
 }
 
 func (e *LogEvent) Execute(timeProvider clock.TimeProvider) []engine.Event {

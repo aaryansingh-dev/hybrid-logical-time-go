@@ -23,7 +23,7 @@ func (e *TrialEnded) Time() time.Time {
 }
 
 func (e *TrialEnded) Name() string {
-	return e.name
+	return GetTypeName(e)
 }
 
 func (e *TrialEnded) Execute(timeProvider clock.TimeProvider) []engine.Event {

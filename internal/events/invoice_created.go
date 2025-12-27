@@ -23,7 +23,7 @@ func (e *InvoiceCreated) Time() time.Time {
 }
 
 func (e *InvoiceCreated) Name() string {
-	return e.name
+	return GetTypeName(e)
 }
 
 func (e *InvoiceCreated) Execute(tp clock.TimeProvider) []engine.Event {
