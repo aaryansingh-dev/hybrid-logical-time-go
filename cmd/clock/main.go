@@ -2,6 +2,7 @@ package main
 
 import (
 	"time"
+	"math/rand"
 
 	"github.com/aaryansingh-dev/hybrid-logical-time-go/internal/clock"
 	"github.com/aaryansingh-dev/hybrid-logical-time-go/internal/context"
@@ -12,6 +13,7 @@ import (
 func main() {
 	// Start of virtual time
 	start := time.Date(2025, 3, 1, 10, 0, 0, 0, time.UTC)
+	rand.Seed(time.Now().UnixNano())
 
 	// Create test clock
 	clk := clock.NewTestClock(start)
