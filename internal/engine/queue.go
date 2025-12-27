@@ -31,3 +31,27 @@ func (q *EventQueue) Pop() interface{}{
 }
 
 // helpers to be made
+
+func NewEventQueue() *EventQueue {
+    q := &EventQueue{
+        events: []Event{},
+    }
+    heap.Init(q)
+    return q
+}
+
+func (q *EventQueue) PushEvent(e Event) {
+    heap.Push(q, e)
+}
+
+func (q *EventQueue) PopEvent() Event {
+    return heap.Pop(q).(Event)
+}
+
+func (q *EventQueue) Peek() Event {
+    if len(q.events) == 0 {
+        return nil
+    }
+    return q.events[0]
+}
+
