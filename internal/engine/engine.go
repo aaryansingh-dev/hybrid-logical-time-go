@@ -2,7 +2,8 @@ package engine
 
 import "github.com/aaryansingh-dev/hybrid-logical-time-go/internal/context"
 import "github.com/aaryansingh-dev/hybrid-logical-time-go/internal/clock"
-import "time"
+import ("time"
+        "fmt")
 
 type Engine struct {
     queue *EventQueue
@@ -40,6 +41,7 @@ func (engine *Engine) Advance(to time.Time, ctx *context.Context) {
         futureEvents := event.Execute(engine.clock)
         for _, newEvent := range futureEvents {
             engine.queue.PushEvent(newEvent)
+            fmt.Printf("---[%s] created in chain at time : [%s]\n", newEvent.Name(), newEvent.Time().Format(time.RFC3339))
         }
     }
 }
