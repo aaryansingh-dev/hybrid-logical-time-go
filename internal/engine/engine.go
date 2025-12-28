@@ -1,48 +1,96 @@
 package engine
 
-import "github.com/aaryansingh-dev/hybrid-logical-time-go/internal/context"
-import "github.com/aaryansingh-dev/hybrid-logical-time-go/internal/clock"
-import ("time"
-        "fmt")
+import (
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/aaryansingh-dev/hybrid-logical-time-go/internal/clock"
+	"github.com/aaryansingh-dev/hybrid-logical-time-go/internal/context"
+)
+
+// Now moving to multi-tenancy which can handle multiple event queues and clocks.
+// This will allow for simulating multiple independent systems in the same engine. Real Time Prod events and
+// Virtual Time Test events can co-exist without interfering with each other.
 
 type Engine struct {
-    queue *EventQueue
-    clock *clock.TestClock
+	queues map[string]*EventQueue
+	clocks map[string]*clock.TestClock
+	mu     sync.RWMutex
+	diag   Diagnostic
 }
 
-
-func NewEngine(q *EventQueue, clock *clock.TestClock) *Engine{
-	return &Engine{queue: q, clock: clock}
+func NewEngine() *Engine {
+	// Initialize the engine with empty maps for queues and clocks
+	return &Engine{queues: make(map[string]*EventQueue), clocks: make(map[string]*clock.TestClock)}
 }
 
-func (engine *Engine) Advance(to time.Time, ctx *context.Context) {
-    for {
-        next := engine.queue.Peek()
+func (engine *Engine) RegisterClock(id string, testClock *clock.TestClock) {
+	// Useful for reigstering a new clock when a new simulation is started by the user.
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
 
-        // No more events: jump clock to target time and stop
-        if next == nil {
-            engine.clock.Set(to)
-            return
-        }
+	engine.clocks[id] = testClock
+	if _, exists := engine.queues[id]; !exists {
+		engine.queues[id] = NewEventQueue()
+	}
 
-        // Next event is after target time: stop advancing
-        if next.Time().After(to) {
-            engine.clock.Set(to)
-            return
-        }
-
-        // Advance clock to event time
-        engine.clock.Set(next.Time())
-
-        // Remove event from queue
-        event := engine.queue.PopEvent()
-
-        // Execute event and schedule any new events
-        futureEvents := event.Execute(engine.clock)
-        for _, newEvent := range futureEvents {
-            engine.queue.PushEvent(newEvent)
-            fmt.Printf("---[%s] created in chain at time : [%s]\n", newEvent.Name(), newEvent.Time().Format(time.RFC3339))
-        }
-    }
 }
 
+func (engine *Engine) getPartition(id string) (*EventQueue, *clock.TestClock, error) {
+
+	engine.mu.RLock()
+	defer engine.mu.RUnlock()
+
+	queue, qOk := engine.queues[id]
+	clock, cOk := engine.clocks[id]
+
+	if !qOk || !cOk {
+		return nil, nil, fmt.Errorf("clock id %s not registered", id)
+	}
+
+	return queue, clock, nil
+}
+
+func (engine *Engine) Advance(id string, to time.Time, ctx *context.Context) error {
+	// Resolve the specific queue and clock for this tenant
+	queue, clock, err := engine.getPartition(id)
+	if err != nil {
+		return err
+	}
+
+	if engine.diag != nil {
+		engine.diag.OnAdvanceStart(id, clock.Now(), to)
+	}
+
+	for {
+		next := queue.Peek()
+
+		// EXIT CONDITION: If no more events exist OR the next event is
+		// scheduled for a time after our target, we jump to target and stop.
+		if next == nil || next.Time().After(to) {
+			clock.Set(to)
+			if engine.diag != nil {
+				engine.diag.OnAdvanceFinish(id, clock.Now())
+			}
+			return nil
+		}
+
+		// teleport to the next event
+		clock.Set(next.Time())
+		event := queue.PopEvent()
+
+		if engine.diag != nil {
+			engine.diag.OnEventExecute(id, event.Name(), clock.Now())
+		}
+
+		// Execute logic and handle "Causality" (chained events)
+		futureEvents := event.Execute(clock)
+		for _, fe := range futureEvents {
+			queue.PushEvent(fe)
+			if engine.diag != nil {
+				engine.diag.OnEventCreated(id, fe.Name(), clock.Now())
+			}
+		}
+	}
+}
