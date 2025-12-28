@@ -20,9 +20,9 @@ type Engine struct {
 	diag   Diagnostic
 }
 
-func NewEngine() *Engine {
+func NewEngine(diag Diagnostic) *Engine {
 	// Initialize the engine with empty maps for queues and clocks
-	return &Engine{queues: make(map[string]*EventQueue), clocks: make(map[string]*clock.TestClock)}
+	return &Engine{queues: make(map[string]*EventQueue), clocks: make(map[string]*clock.TestClock), diag: diag}
 }
 
 func (engine *Engine) RegisterClock(id string, testClock *clock.TestClock) {
@@ -52,6 +52,56 @@ func (engine *Engine) getPartition(id string) (*EventQueue, *clock.TestClock, er
 	return queue, clock, nil
 }
 
+func (engine *Engine) Schedule(event Event) {
+	q := engine.getQueue(event.ClockID())
+	q.PushEvent(event)
+}
+
+func (engine *Engine) getQueue(id string) *EventQueue {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if q, ok := engine.queues[id]; ok {
+		return q
+	}
+	q := NewEventQueue()
+	engine.queues[id] = q
+	return q
+}
+
+func (engine *Engine) start(interval time.Duration){
+	ticker := time.NewTicker(interval)
+
+	go func(){
+		for range ticker.C{
+			now := time.Now().UTC()
+			queue := engine.getQueue("SYSTEM")
+
+			for{
+				next := queue.Peek()
+
+				if next == nil || next.Time().After(now) {
+					break
+				}
+
+				event := queue.PopEvent()
+				if engine.diag != nil {
+					engine.diag.OnEventExecute("SYSTEM", event.Name(), now)
+				}
+
+				futureEvents := event.Execute(nil) 
+				for _, futureEvent := range futureEvents {
+					engine.Schedule(futureEvent)
+				}
+
+			}
+		}
+	}()
+
+}
+
+
+
+// this is specifically used by the Test users to test their timelines
 func (engine *Engine) Advance(id string, to time.Time, ctx *context.Context) error {
 	// Resolve the specific queue and clock for this tenant
 	queue, clock, err := engine.getPartition(id)
@@ -86,10 +136,10 @@ func (engine *Engine) Advance(id string, to time.Time, ctx *context.Context) err
 
 		// Execute logic and handle "Causality" (chained events)
 		futureEvents := event.Execute(clock)
-		for _, fe := range futureEvents {
-			queue.PushEvent(fe)
+		for _, futureEvent:= range futureEvents {
+			queue.PushEvent(futureEvent)
 			if engine.diag != nil {
-				engine.diag.OnEventCreated(id, fe.Name(), clock.Now())
+				engine.diag.OnEventCreated(id, futureEvent.Name(), clock.Now())
 			}
 		}
 	}

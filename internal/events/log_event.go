@@ -9,12 +9,13 @@ import (
 )
 
 type LogEvent struct {
-	at   time.Time
-	name string
+	at      time.Time
+	name    string
+	clockID string
 }
 
-func NewLogEvent(at time.Time, name string) *LogEvent {
-	return &LogEvent{at: at, name: name}
+func NewLogEvent(at time.Time, name string, clockID string) *LogEvent {
+	return &LogEvent{at: at, name: name, clockID: clockID}
 }
 
 func (e *LogEvent) Time() time.Time {
@@ -25,6 +26,10 @@ func (e *LogEvent) Name() string {
 	return GetTypeName(e)
 }
 
+func (e *LogEvent) ClockID() string {
+	return e.clockID
+}
+
 func (e *LogEvent) Execute(timeProvider clock.TimeProvider) []engine.Event {
 	fmt.Printf("[%s] Executed %s\n", timeProvider.Now().Format(time.RFC3339), e.name)
 
@@ -32,7 +37,7 @@ func (e *LogEvent) Execute(timeProvider clock.TimeProvider) []engine.Event {
 	if e.name == "Event-B" {
 		newEventTime := timeProvider.Now().Add(90 * time.Minute)
 		return []engine.Event{
-			NewLogEvent(newEventTime, "Event-2A"),
+			NewLogEvent(newEventTime, "Event-2A", e.clockID),
 		}
 	}
 
