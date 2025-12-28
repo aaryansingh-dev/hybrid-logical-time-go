@@ -1,8 +1,10 @@
 package engine
 
-import "time"
-import "fmt"
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Diagnostic defines the hooks for system observability.
 // This allows the engine to remain agnostic of how logs are formatted.
@@ -15,6 +17,10 @@ type Diagnostic interface {
 
 // ConsoleLogger is one specific implementation of the Diagnostic interface.
 type ConsoleLogger struct{}
+
+func NewConsoleLogger() *ConsoleLogger {
+	return &ConsoleLogger{}
+}
 
 func (c *ConsoleLogger) OnAdvanceStart(id string, start, target time.Time) {
 	fmt.Printf("\n[START]  %-12s | Advancing from %s -> %s\n", id, start.Format("15:04:05"), target.Format("15:04:05"))
