@@ -14,30 +14,40 @@ import (
 // Virtual Time Test events can co-exist without interfering with each other.
 
 type Engine struct {
-	queues map[string]*EventQueue
-	clocks map[string]*clock.TestClock
-	mu     sync.RWMutex
-	diag   Diagnostic
+	queues      map[string]*EventQueue
+	clocks      map[string]clock.TimeProvider
+	systemQueue *EventQueue
+
+	mu   sync.RWMutex
+	diag Diagnostic
 }
 
 func NewEngine(diag Diagnostic) *Engine {
 	// Initialize the engine with empty maps for queues and clocks
-	return &Engine{queues: make(map[string]*EventQueue), clocks: make(map[string]*clock.TestClock), diag: diag}
+	return &Engine{
+		queues:      make(map[string]*EventQueue),
+		clocks:      make(map[string]clock.TimeProvider),
+		diag:        diag,
+		systemQueue: NewEventQueue(),
+	}
 }
 
-func (engine *Engine) RegisterClock(id string, testClock *clock.TestClock) {
+func (engine *Engine) RegisterPartition(partitionID string, timeProvider clock.TimeProvider) {
 	// Useful for reigstering a new clock when a new simulation is started by the user.
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 
-	engine.clocks[id] = testClock
-	if _, exists := engine.queues[id]; !exists {
-		engine.queues[id] = NewEventQueue()
+	engine.clocks[partitionID] = timeProvider
+	if _, exists := engine.queues[partitionID]; !exists {
+		engine.queues[partitionID] = NewEventQueue()
 	}
 
 }
 
-func (engine *Engine) getPartition(id string) (*EventQueue, *clock.TestClock, error) {
+func (engine *Engine) getPartition(id string) (*EventQueue, clock.TimeProvider, error) {
+
+	// design decision: returns a clock.TimeProvider instead of a TestClock to better handle more different
+	// clocks in the future: Liskov Substitution Principle, and Open Closed Principle
 
 	engine.mu.RLock()
 	defer engine.mu.RUnlock()
@@ -53,42 +63,54 @@ func (engine *Engine) getPartition(id string) (*EventQueue, *clock.TestClock, er
 }
 
 func (engine *Engine) Schedule(event Event) {
-	q := engine.getQueue(event.ClockID())
-	q.PushEvent(event)
-}
+	partitionID := event.ClockID()
 
-func (engine *Engine) getQueue(id string) *EventQueue {
-	engine.mu.Lock()
-	defer engine.mu.Unlock()
-	if q, ok := engine.queues[id]; ok {
-		return q
+	if partitionID == "SYSTEM" {
+		engine.systemQueue.PushEvent(event)
+		return
 	}
-	q := NewEventQueue()
-	engine.queues[id] = q
-	return q
+
+	// If it doesn't exist, we auto-register.
+	engine.mu.RLock()
+	queue, exists := engine.queues[partitionID]
+	engine.mu.RUnlock()
+
+	// lazy registry pattern in case the queue was not made
+	if !exists {
+		engine.mu.Lock()
+		// double-check pattern to handle concurrent initialization racing.
+		if q, ok := engine.queues[partitionID]; ok {
+			queue = q
+		} else {
+			queue = NewEventQueue()
+			engine.queues[partitionID] = queue
+		}
+		engine.mu.Unlock()
+	}
+
+	queue.PushEvent(event)
 }
 
-func (engine *Engine) start(interval time.Duration){
+func (engine *Engine) StartRealTimeWorker(interval time.Duration) {
 	ticker := time.NewTicker(interval)
+	realTime := clock.NewRealTimeProvider()
 
-	go func(){
-		for range ticker.C{
+	go func() {
+		for range ticker.C {
 			now := time.Now().UTC()
-			queue := engine.getQueue("SYSTEM")
-
-			for{
-				next := queue.Peek()
+			for {
+				next := engine.systemQueue.Peek()
 
 				if next == nil || next.Time().After(now) {
 					break
 				}
 
-				event := queue.PopEvent()
+				event := engine.systemQueue.PopEvent()
 				if engine.diag != nil {
 					engine.diag.OnEventExecute("SYSTEM", event.Name(), now)
 				}
 
-				futureEvents := event.Execute(nil) 
+				futureEvents := event.Execute(realTime)
 				for _, futureEvent := range futureEvents {
 					engine.Schedule(futureEvent)
 				}
@@ -99,17 +121,26 @@ func (engine *Engine) start(interval time.Duration){
 
 }
 
-
 // this is specifically used by the Test users to test their timelines
-func (engine *Engine) Advance(id string, to time.Time, ctx *context.Context) error {
+func (engine *Engine) Advance(partitionID string, to time.Time, ctx *context.Context) error {
+
+	if partitionID == "SYSTEM" {
+		return fmt.Errorf("invalid operation: the SYSTEM partition follows wall-clock time and cannot be advanced manually")
+	}
+
 	// Resolve the specific queue and clock for this tenant
-	queue, clock, err := engine.getPartition(id)
+	queue, provider, err := engine.getPartition(partitionID)
 	if err != nil {
 		return err
 	}
 
 	if engine.diag != nil {
-		engine.diag.OnAdvanceStart(id, clock.Now(), to)
+		engine.diag.OnAdvanceStart(partitionID, provider.Now(), to)
+	}
+
+	testClock, ok := provider.(*clock.TestClock)
+	if !ok {
+		return fmt.Errorf("Partition %s is not a TestClock; manual time warping is only supported for simulation partitions", partitionID)
 	}
 
 	for {
@@ -118,27 +149,27 @@ func (engine *Engine) Advance(id string, to time.Time, ctx *context.Context) err
 		// EXIT CONDITION: If no more events exist OR the next event is
 		// scheduled for a time after our target, we jump to target and stop.
 		if next == nil || next.Time().After(to) {
-			clock.Set(to)
+			testClock.Set(to)
 			if engine.diag != nil {
-				engine.diag.OnAdvanceFinish(id, clock.Now())
+				engine.diag.OnAdvanceFinish(partitionID, testClock.Now())
 			}
 			return nil
 		}
 
 		// teleport to the next event
-		clock.Set(next.Time())
+		testClock.Set(next.Time())
 		event := queue.PopEvent()
 
 		if engine.diag != nil {
-			engine.diag.OnEventExecute(id, event.Name(), clock.Now())
+			engine.diag.OnEventExecute(partitionID, event.Name(), testClock.Now())
 		}
 
 		// Execute logic and handle "Causality" (chained events)
-		futureEvents := event.Execute(clock)
-		for _, futureEvent:= range futureEvents {
-			queue.PushEvent(futureEvent)
+		futureEvents := event.Execute(testClock)
+		for _, futureEvent := range futureEvents {
+			engine.Schedule(futureEvent)
 			if engine.diag != nil {
-				engine.diag.OnEventCreated(id, futureEvent.Name(), clock.Now())
+				engine.diag.OnEventCreated(partitionID, futureEvent.Name(), testClock.Now())
 			}
 		}
 	}

@@ -52,5 +52,9 @@ func (billingEvent *PaymentAttempt) Execute(timeProvider clock.TimeProvider) []e
 	fmt.Printf("[BILLING] SUCCESS: Payment processed for %s at %s\n",
 		billingEvent.customerID, timeProvider.Now().Format(time.RFC3339))
 
-	return nil
+	nextInvoiceCycle := timeProvider.Now().AddDate(0, 1, 0) // 1 month later
+	
+	return []engine.Event{
+		NewInvoiceCreated(nextInvoiceCycle, billingEvent.customerID, billingEvent.partitionID),
+	}
 }
