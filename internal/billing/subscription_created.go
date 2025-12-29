@@ -10,15 +10,15 @@ import (
 type SubscriptionCreated struct {
 	scheduledAt time.Time
 	customerID  string
-	trialDays   int
+	trialDuration time.Duration
 	partitionID string
 }
 
-func NewSubscriptionCreated(at time.Time, customerID string, trialDays int, partitionID string) *SubscriptionCreated {
+func NewSubscriptionCreated(at time.Time, customerID string, trialDuration time.Duration, partitionID string) *SubscriptionCreated {
 	return &SubscriptionCreated{
 		scheduledAt: at,
 		customerID:  customerID,
-		trialDays:   trialDays,
+		trialDuration: trialDuration,
 		partitionID: partitionID,
 	}
 }
@@ -29,7 +29,7 @@ func (billingEvent *SubscriptionCreated) ClockID() string { return billingEvent.
 
 func (billingEvent *SubscriptionCreated) Execute(timeProvider clock.TimeProvider) []engine.Event {
 	// Calculate trial end date based on current logical time
-	trialEnd := timeProvider.Now().AddDate(0, 0, billingEvent.trialDays)
+	trialEnd := timeProvider.Now().Add(billingEvent.trialDuration)
 
 	return []engine.Event{
 		NewTrialEnded(trialEnd, billingEvent.customerID, billingEvent.partitionID),
