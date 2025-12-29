@@ -113,6 +113,9 @@ func (engine *Engine) StartRealTimeWorker(interval time.Duration) {
 				futureEvents := event.Execute(realTime)
 				for _, futureEvent := range futureEvents {
 					engine.Schedule(futureEvent)
+					if engine.diag != nil {
+						engine.diag.OnEventCreated("SYSTEM", futureEvent.Name(), futureEvent.Time().UTC(), realTime.Now())
+					}
 				}
 
 			}
@@ -169,8 +172,45 @@ func (engine *Engine) Advance(partitionID string, to time.Time, ctx *context.Con
 		for _, futureEvent := range futureEvents {
 			engine.Schedule(futureEvent)
 			if engine.diag != nil {
-				engine.diag.OnEventCreated(partitionID, futureEvent.Name(), testClock.Now())
+				engine.diag.OnEventCreated(partitionID, futureEvent.Name(), futureEvent.Time().UTC(), testClock.Now())
 			}
 		}
 	}
+}
+
+// GetStatus returns thed current time an queue size for all registered partitions.
+func (engine *Engine) GetStatus() map[string]string {
+	engine.mu.RLock()
+	defer engine.mu.RUnlock()
+
+	status := make(map[string]string)
+	for id, provider := range engine.clocks {
+		queue := engine.queues[id]
+		status[id] = fmt.Sprintf("Time: %s | Pending Events: %d",
+			provider.Now().Format("2006-01-02 15:04:05"),
+			queue.Len())
+	}
+
+	status["SYSTEM"] = fmt.Sprintf("Time: %s | Pending Events: %d",
+		time.Now().Format("2006-01-02 15:04:05"),
+		engine.systemQueue.Len())
+
+	return status
+}
+
+// GetPartitionTime retrieves the current time for a specific partition.
+// this is needed for calculating relative time advances in the CLI.
+func (engine *Engine) GetPartitionTime(partitionID string) (time.Time, error) {
+	engine.mu.RLock()
+	defer engine.mu.RUnlock()
+
+	testClock, ok := engine.clocks[partitionID]
+	if !ok {
+		if partitionID == "SYSTEM" {
+			return time.Now().UTC(), nil
+		}
+		return time.Time{}, fmt.Errorf("partition %s not found", partitionID)
+	}
+
+	return testClock.Now(), nil
 }
